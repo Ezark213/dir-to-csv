@@ -1,0 +1,12 @@
+# Generated files
+directory_structure.csv
+error.log
+config.json
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Temp files
+*.tmp
+*~

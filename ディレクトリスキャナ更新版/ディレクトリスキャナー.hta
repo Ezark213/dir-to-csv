@@ -1,0 +1,542 @@
+﻿<html>
+<head>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Directory Scanner</title>
+    <HTA:APPLICATION
+        ID="DirectoryScanner"
+        APPLICATIONNAME="Directory Scanner"
+        BORDER="thin"
+        BORDERSTYLE="normal"
+        MAXIMIZEBUTTON="yes"
+        MINIMIZEBUTTON="yes"
+        SCROLL="no"
+        SHOWINTASKBAR="yes"
+        SINGLEINSTANCE="yes"
+        SYSMENU="yes"
+        VERSION="2.0"
+        WINDOWSTATE="normal"
+    >
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Meiryo UI", "Yu Gothic UI", sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 700px; margin: 0 auto; }
+        .card {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            padding: 30px;
+        }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 { color: #333; font-size: 24px; margin-bottom: 8px; }
+        .header p { color: #888; font-size: 13px; }
+        .step-indicator { display: flex; justify-content: center; margin-bottom: 30px; }
+        .step-dot {
+            width: 40px; height: 40px; border-radius: 50%;
+            background: #e0e0e0; color: #999;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: bold; margin: 0 10px; position: relative;
+        }
+        .step-dot.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .step-dot.done { background: #4CAF50; color: white; }
+        .step-dot::after {
+            content: ''; position: absolute;
+            width: 40px; height: 3px; background: #e0e0e0;
+            left: 40px; top: 50%; transform: translateY(-50%);
+        }
+        .step-dot:last-child::after { display: none; }
+        .step-dot.done::after { background: #4CAF50; }
+        .section { display: none; }
+        .section.active { display: block; }
+        .folder-input-area {
+            background: #f8f9fa; border: 2px solid #e0e0e0;
+            border-radius: 16px; padding: 25px; text-align: center;
+        }
+        .folder-input-area.has-path {
+            border-color: #4CAF50; background: #e8f5e9;
+        }
+        .folder-icon { font-size: 48px; margin-bottom: 10px; }
+        .folder-input-area h3 { color: #333; margin-bottom: 15px; font-size: 16px; }
+        .path-input-row {
+            display: flex; gap: 10px; margin-bottom: 15px;
+        }
+        .path-input {
+            flex: 1; padding: 14px 16px; border: 2px solid #ddd;
+            border-radius: 10px; font-size: 14px; outline: none;
+        }
+        .path-input:focus { border-color: #667eea; }
+        .path-input.valid { border-color: #4CAF50; background: #f1f8e9; }
+        .browse-btn {
+            padding: 14px 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; border: none; border-radius: 10px;
+            font-size: 14px; font-weight: bold; cursor: pointer;
+            white-space: nowrap;
+        }
+        .browse-btn:hover { opacity: 0.9; }
+        .path-examples {
+            text-align: left; background: #fff; border-radius: 8px;
+            padding: 12px 15px; margin-top: 10px; font-size: 12px; color: #666;
+        }
+        .path-examples strong { color: #333; display: block; margin-bottom: 6px; }
+        .path-examples code {
+            display: inline-block; background: #f0f0f0; padding: 2px 6px;
+            border-radius: 4px; margin: 2px 4px 2px 0; font-size: 11px;
+        }
+        .btn {
+            padding: 16px 32px; border: none; border-radius: 12px;
+            font-size: 16px; font-weight: bold; cursor: pointer;
+            transition: all 0.3s; display: inline-flex;
+            align-items: center; justify-content: center; gap: 10px;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; width: 100%; margin-top: 20px;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        .btn-primary:disabled {
+            background: #ccc; cursor: not-allowed;
+            transform: none; box-shadow: none;
+        }
+        .btn-secondary { background: #f0f0f0; color: #333; padding: 12px 24px; }
+        .btn-secondary:hover { background: #e0e0e0; }
+        .btn-success {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white; width: 100%; margin-top: 15px;
+        }
+        .options-toggle {
+            background: none; border: none; color: #667eea;
+            cursor: pointer; font-size: 14px; margin-top: 20px;
+        }
+        .options-panel {
+            display: none; margin-top: 20px; padding: 20px;
+            background: #f8f9fa; border-radius: 12px;
+        }
+        .options-panel.show { display: block; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label {
+            display: block; font-size: 13px; color: #555;
+            margin-bottom: 6px; font-weight: bold;
+        }
+        .form-group input, .form-group textarea {
+            width: 100%; padding: 10px 12px; border: 1px solid #ddd;
+            border-radius: 8px; font-size: 13px;
+        }
+        .form-group textarea { height: 80px; resize: vertical; }
+        .progress-section { text-align: center; }
+        .progress-animation {
+            width: 120px; height: 120px; margin: 20px auto;
+            border: 8px solid #e0e0e0; border-top-color: #667eea;
+            border-radius: 50%; animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .progress-text { font-size: 18px; color: #333; margin-bottom: 10px; }
+        .progress-sub { font-size: 13px; color: #888; }
+        .result-section { text-align: center; }
+        .success-icon { font-size: 80px; margin-bottom: 20px; }
+        .result-section h2 { color: #4CAF50; margin-bottom: 10px; }
+        .result-section p { color: #666; margin-bottom: 20px; }
+        .stats-grid { display: flex; gap: 15px; margin: 25px 0; }
+        .stat-box {
+            flex: 1;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; padding: 20px; border-radius: 12px; text-align: center;
+        }
+        .stat-value { font-size: 28px; font-weight: bold; }
+        .stat-label { font-size: 12px; opacity: 0.9; margin-top: 5px; }
+        .file-location {
+            background: #f8f9fa; border-radius: 8px;
+            padding: 15px; margin: 15px 0; text-align: left;
+        }
+        .file-location strong { color: #333; font-size: 13px; }
+        .file-location code {
+            display: block; margin-top: 8px; padding: 10px;
+            background: #fff; border: 1px solid #ddd;
+            border-radius: 6px; font-size: 12px; word-break: break-all;
+        }
+        .action-buttons { display: flex; gap: 10px; margin-top: 20px; }
+        .action-buttons .btn { flex: 1; }
+        .error-section { text-align: center; }
+        .error-icon { font-size: 80px; margin-bottom: 20px; }
+        .error-section h2 { color: #f44336; margin-bottom: 10px; }
+        .error-message {
+            background: #ffebee; border: 1px solid #ffcdd2;
+            border-radius: 8px; padding: 15px; margin: 15px 0;
+            text-align: left; font-size: 13px; color: #c62828;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="header">
+                <h1 id="title1"></h1>
+                <p id="title2"></p>
+            </div>
+            <div class="step-indicator">
+                <div class="step-dot active" id="step1">1</div>
+                <div class="step-dot" id="step2">2</div>
+                <div class="step-dot" id="step3">3</div>
+            </div>
+
+            <div class="section active" id="section1">
+                <div class="folder-input-area" id="folderArea">
+                    <div class="folder-icon" id="folderIcon"></div>
+                    <h3 id="selectTitle"></h3>
+                    <div class="path-input-row">
+                        <input type="text" class="path-input" id="pathInput" placeholder="" oninput="onPathInput()" onchange="onPathInput()">
+                        <button class="browse-btn" onclick="selectFolder()" id="browseBtn"></button>
+                    </div>
+                    <div class="path-examples" id="pathExamples"></div>
+                </div>
+
+                <button class="options-toggle" onclick="toggleOptions()" id="optToggle"></button>
+
+                <div class="options-panel" id="optionsPanel">
+                    <div class="form-group">
+                        <label id="lbl1"></label>
+                        <input type="number" id="maxDepth" value="8" min="1" max="8">
+                    </div>
+                    <div class="form-group">
+                        <label id="lbl2"></label>
+                        <textarea id="excludeDirs">.git
+node_modules
+__pycache__
+.venv</textarea>
+                    </div>
+                    <div class="form-group">
+                        <label id="lbl3"></label>
+                        <input type="text" id="outputFile" value="directory_structure.csv">
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" id="startBtn" onclick="startScan()" disabled>
+                    <span id="startLabel"></span>
+                </button>
+            </div>
+
+            <div class="section" id="section2">
+                <div class="progress-section">
+                    <div class="progress-animation"></div>
+                    <div class="progress-text" id="progText"></div>
+                    <div class="progress-sub" id="progressSub"></div>
+                </div>
+            </div>
+
+            <div class="section" id="section3">
+                <div class="result-section">
+                    <div class="success-icon">&#x2705;</div>
+                    <h2 id="doneTitle"></h2>
+                    <p id="doneDesc"></p>
+                    <div class="stats-grid">
+                        <div class="stat-box">
+                            <div class="stat-value" id="resultFiles">0</div>
+                            <div class="stat-label" id="statLbl1"></div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-value" id="resultTime">0</div>
+                            <div class="stat-label" id="statLbl2"></div>
+                        </div>
+                    </div>
+                    <div class="file-location">
+                        <strong id="outLbl"></strong>
+                        <code id="outputPath"></code>
+                    </div>
+                    <div class="action-buttons">
+                        <button class="btn btn-secondary" onclick="openOutputFolder()" id="btnFolder"></button>
+                        <button class="btn btn-secondary" onclick="openCSVFile()" id="btnCSV"></button>
+                    </div>
+                    <button class="btn btn-success" onclick="resetApp()" id="btnReset"></button>
+                </div>
+            </div>
+
+            <div class="section" id="sectionError">
+                <div class="error-section">
+                    <div class="error-icon">&#x274C;</div>
+                    <h2 id="errTitle"></h2>
+                    <div class="error-message" id="errorMessage"></div>
+                    <button class="btn btn-primary" onclick="resetApp()" id="btnRetry"></button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        var selectedFolderPath = '';
+        var appPath = '';
+        var outputFilePath = '';
+        var startTime = 0;
+
+        // Japanese text (loaded via script to avoid encoding issues)
+        var TEXT = {
+            title1: "\u30C7\u30A3\u30EC\u30AF\u30C8\u30EA\u30B9\u30AD\u30E3\u30CA\u30FC",
+            title2: "\u30D5\u30A9\u30EB\u30C0\u69CB\u9020\u3092CSV\u30D5\u30A1\u30A4\u30EB\u306B\u51FA\u529B\u3057\u307E\u3059",
+            folderIcon: "\uD83D\uDCC1",
+            folderIconSelected: "\uD83D\uDCC2",
+            selectTitle: "\u30B9\u30AD\u30E3\u30F3\u3059\u308B\u30D5\u30A9\u30EB\u30C0\u3092\u6307\u5B9A",
+            pathPlaceholder: "\u30D1\u30B9\u3092\u5165\u529B\u307E\u305F\u306F\u53C2\u7167\u30DC\u30BF\u30F3\u3067\u9078\u629E",
+            browseBtn: "\u53C2\u7167...",
+            pathExamples: "<strong>\u5165\u529B\u4F8B:</strong><code>C:\\Users\\...</code><code>\\\\server\\share</code><code>Dropbox\u3084OneDrive\u306E\u30D1\u30B9</code>",
+            optShow: "\u25BC \u8A73\u7D30\u8A2D\u5B9A\u3092\u8868\u793A",
+            optHide: "\u25B2 \u8A73\u7D30\u8A2D\u5B9A\u3092\u96A0\u3059",
+            lbl1: "\u6700\u5927\u968E\u5C64\u6570\uFF081\uFF5E8\uFF09",
+            lbl2: "\u9664\u5916\u30D5\u30A9\u30EB\u30C0\uFF081\u884C\u306B1\u3064\uFF09",
+            lbl3: "\u51FA\u529B\u30D5\u30A1\u30A4\u30EB\u540D",
+            startBtn: "\u30B9\u30AD\u30E3\u30F3\u958B\u59CB",
+            progText: "\u30B9\u30AD\u30E3\u30F3\u4E2D...",
+            progSub: "\u30D5\u30A9\u30EB\u30C0\u3092\u8AAD\u307F\u53D6\u3063\u3066\u3044\u307E\u3059",
+            progSub2: "PowerShell\u30B9\u30AF\u30EA\u30D7\u30C8\u3092\u5B9F\u884C\u4E2D...",
+            doneTitle: "\u30B9\u30AD\u30E3\u30F3\u5B8C\u4E86\uFF01",
+            doneDesc: "\u30C7\u30A3\u30EC\u30AF\u30C8\u30EA\u69CB\u9020\u3092CSV\u30D5\u30A1\u30A4\u30EB\u306B\u51FA\u529B\u3057\u307E\u3057\u305F",
+            statLbl1: "\u30D5\u30A1\u30A4\u30EB\u6570",
+            statLbl2: "\u51E6\u7406\u6642\u9593\uFF08\u79D2\uFF09",
+            outLbl: "\u51FA\u529B\u30D5\u30A1\u30A4\u30EB:",
+            btnFolder: "\uD83D\uDCC2 \u30D5\u30A9\u30EB\u30C0\u3092\u958B\u304F",
+            btnCSV: "\uD83D\uDCC4 CSV\u3092\u958B\u304F",
+            btnReset: "\uD83D\uDD04 \u5225\u306E\u30D5\u30A9\u30EB\u30C0\u3092\u30B9\u30AD\u30E3\u30F3",
+            errTitle: "\u30A8\u30E9\u30FC\u304C\u767A\u751F\u3057\u307E\u3057\u305F",
+            btnRetry: "\uD83D\uDD04 \u6700\u521D\u304B\u3089\u3084\u308A\u76F4\u3059",
+            browseTitle: "\u30B9\u30AD\u30E3\u30F3\u3059\u308B\u30D5\u30A9\u30EB\u30C0\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044",
+            errFolder: "\u30D5\u30A9\u30EB\u30C0\u306E\u9078\u629E\u4E2D\u306B\u30A8\u30E9\u30FC\u304C\u767A\u751F\u3057\u307E\u3057\u305F",
+            errConfig: "\u8A2D\u5B9A\u306E\u4FDD\u5B58\u4E2D\u306B\u30A8\u30E9\u30FC\u304C\u767A\u751F\u3057\u307E\u3057\u305F",
+            errScript: "\u30B9\u30AF\u30EA\u30D7\u30C8\u306E\u5B9F\u884C\u4E2D\u306B\u30A8\u30E9\u30FC\u304C\u767A\u751F\u3057\u307E\u3057\u305F",
+            errResult: "\u7D50\u679C\u306E\u78BA\u8A8D\u4E2D\u306B\u30A8\u30E9\u30FC\u304C\u767A\u751F\u3057\u307E\u3057\u305F",
+            errNoCSV: "CSV\u30D5\u30A1\u30A4\u30EB\u304C\u751F\u6210\u3055\u308C\u307E\u305B\u3093\u3067\u3057\u305F\u3002",
+            alertSelect: "\u30D5\u30A9\u30EB\u30C0\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044"
+        };
+
+        window.onload = function() {
+            // Set all text
+            document.getElementById('title1').innerText = TEXT.title1;
+            document.getElementById('title2').innerText = TEXT.title2;
+            document.getElementById('folderIcon').innerText = TEXT.folderIcon;
+            document.getElementById('selectTitle').innerText = TEXT.selectTitle;
+            document.getElementById('pathInput').placeholder = TEXT.pathPlaceholder;
+            document.getElementById('browseBtn').innerText = TEXT.browseBtn;
+            document.getElementById('pathExamples').innerHTML = TEXT.pathExamples;
+            document.getElementById('optToggle').innerText = TEXT.optShow;
+            document.getElementById('lbl1').innerText = TEXT.lbl1;
+            document.getElementById('lbl2').innerText = TEXT.lbl2;
+            document.getElementById('lbl3').innerText = TEXT.lbl3;
+            document.getElementById('startLabel').innerText = TEXT.startBtn;
+            document.getElementById('progText').innerText = TEXT.progText;
+            document.getElementById('progressSub').innerText = TEXT.progSub;
+            document.getElementById('doneTitle').innerText = TEXT.doneTitle;
+            document.getElementById('doneDesc').innerText = TEXT.doneDesc;
+            document.getElementById('statLbl1').innerText = TEXT.statLbl1;
+            document.getElementById('statLbl2').innerText = TEXT.statLbl2;
+            document.getElementById('outLbl').innerText = TEXT.outLbl;
+            document.getElementById('btnFolder').innerText = TEXT.btnFolder;
+            document.getElementById('btnCSV').innerText = TEXT.btnCSV;
+            document.getElementById('btnReset').innerText = TEXT.btnReset;
+            document.getElementById('errTitle').innerText = TEXT.errTitle;
+            document.getElementById('btnRetry').innerText = TEXT.btnRetry;
+
+            try {
+                var shell = new ActiveXObject("WScript.Shell");
+                appPath = shell.CurrentDirectory;
+                if (!appPath) {
+                    var htaPath = location.pathname;
+                    if (htaPath.charAt(0) === '/') htaPath = htaPath.substr(1);
+                    htaPath = htaPath.replace(/\//g, '\\');
+                    appPath = htaPath.substr(0, htaPath.lastIndexOf('\\'));
+                }
+            } catch(e) { appPath = ''; }
+            window.resizeTo(750, 720);
+        };
+
+        function selectFolder() {
+            try {
+                var shell = new ActiveXObject("Shell.Application");
+                var folder = shell.BrowseForFolder(0, TEXT.browseTitle, 0x0051, "");
+                if (folder) {
+                    selectedFolderPath = folder.Self.Path;
+                    document.getElementById('pathInput').value = selectedFolderPath;
+                    updatePathUI(true);
+                }
+            } catch(e) {
+                showError(TEXT.errFolder + ': ' + e.message);
+            }
+        }
+
+        function onPathInput() {
+            var path = document.getElementById('pathInput').value.trim();
+            selectedFolderPath = path;
+            updatePathUI(path.length > 0);
+        }
+
+        function updatePathUI(hasPath) {
+            var area = document.getElementById('folderArea');
+            var input = document.getElementById('pathInput');
+            var btn = document.getElementById('startBtn');
+            if (hasPath) {
+                area.className = 'folder-input-area has-path';
+                input.className = 'path-input valid';
+                document.getElementById('folderIcon').innerText = TEXT.folderIconSelected;
+                btn.disabled = false;
+            } else {
+                area.className = 'folder-input-area';
+                input.className = 'path-input';
+                document.getElementById('folderIcon').innerText = TEXT.folderIcon;
+                btn.disabled = true;
+            }
+        }
+
+        function toggleOptions() {
+            var panel = document.getElementById('optionsPanel');
+            var btn = document.getElementById('optToggle');
+            if (panel.className.indexOf('show') > -1) {
+                panel.className = 'options-panel';
+                btn.innerText = TEXT.optShow;
+            } else {
+                panel.className = 'options-panel show';
+                btn.innerText = TEXT.optHide;
+            }
+        }
+
+        function showSection(num) {
+            for (var i = 1; i <= 3; i++) {
+                document.getElementById('section' + i).className = 'section';
+                document.getElementById('step' + i).className = 'step-dot';
+            }
+            document.getElementById('sectionError').className = 'section';
+            if (num === 'error') {
+                document.getElementById('sectionError').className = 'section active';
+            } else {
+                document.getElementById('section' + num).className = 'section active';
+                for (var j = 1; j <= num; j++) {
+                    document.getElementById('step' + j).className = (j < num) ? 'step-dot done' : 'step-dot active';
+                }
+            }
+        }
+
+        function startScan() {
+            selectedFolderPath = document.getElementById('pathInput').value.trim();
+            if (!selectedFolderPath) { alert(TEXT.alertSelect); return; }
+            showSection(2);
+            startTime = new Date().getTime();
+            var maxDepth = document.getElementById('maxDepth').value || 8;
+            var excludeDirs = document.getElementById('excludeDirs').value || '';
+            var outputFile = document.getElementById('outputFile').value || 'directory_structure.csv';
+
+            try {
+                var fso = new ActiveXObject("Scripting.FileSystemObject");
+                var configPath = appPath + "\\config.json";
+                var configFile = fso.CreateTextFile(configPath, true, false);
+                var excArr = excludeDirs.split('\n');
+                var excStr = '';
+                for (var i = 0; i < excArr.length; i++) {
+                    if (excArr[i].trim()) {
+                        if (excStr) excStr += '", "';
+                        excStr += excArr[i].trim();
+                    }
+                }
+                var configStr = '{\n';
+                configStr += '    "rootPath": "' + selectedFolderPath.replace(/\\/g, '\\\\') + '",\n';
+                configStr += '    "outputPath": "' + outputFile + '",\n';
+                configStr += '    "errorLogPath": "error.log",\n';
+                configStr += '    "maxDepth": ' + parseInt(maxDepth) + ',\n';
+                configStr += '    "excludeDirs": ["' + excStr + '"],\n';
+                configStr += '    "excludeFiles": [".DS_Store", "Thumbs.db"],\n';
+                configStr += '    "includeHidden": false,\n';
+                configStr += '    "encoding": "UTF8",\n';
+                configStr += '    "logLevel": "Info"\n';
+                configStr += '}';
+                configFile.Write(configStr);
+                configFile.Close();
+                outputFilePath = appPath + '\\' + outputFile;
+                setTimeout(function() { runPowerShell(); }, 500);
+            } catch(e) {
+                showError(TEXT.errConfig + ': ' + e.message);
+            }
+        }
+
+        function runPowerShell() {
+            try {
+                var shell = new ActiveXObject("WScript.Shell");
+                var psPath = appPath + "\\directory_scanner.ps1";
+                var cmd = 'powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + psPath + '"';
+                document.getElementById('progressSub').innerText = TEXT.progSub2;
+                shell.Run(cmd, 0, true);
+                setTimeout(function() { checkResult(); }, 500);
+            } catch(e) {
+                showError(TEXT.errScript + ': ' + e.message);
+            }
+        }
+
+        function checkResult() {
+            try {
+                var fso = new ActiveXObject("Scripting.FileSystemObject");
+                if (fso.FileExists(outputFilePath)) {
+                    var endTime = new Date().getTime();
+                    var duration = ((endTime - startTime) / 1000).toFixed(1);
+                    // Use ADODB.Stream for UTF-8 files
+                    var stream = new ActiveXObject("ADODB.Stream");
+                    stream.Type = 2; // adTypeText
+                    stream.Charset = "UTF-8";
+                    stream.Open();
+                    stream.LoadFromFile(outputFilePath);
+                    var content = stream.ReadText(-1); // -1 = adReadAll
+                    stream.Close();
+                    var lines = content.split('\n');
+                    var lineCount = 0;
+                    for (var i = 0; i < lines.length; i++) {
+                        if (lines[i].trim()) lineCount++;
+                    }
+                    document.getElementById('resultFiles').innerText = Math.max(0, lineCount - 1).toLocaleString();
+                    document.getElementById('resultTime').innerText = duration;
+                    document.getElementById('outputPath').innerText = outputFilePath;
+                    showSection(3);
+                } else {
+                    var errMsg = TEXT.errNoCSV;
+                    var errorLogPath = appPath + "\\error.log";
+                    if (fso.FileExists(errorLogPath)) {
+                        var errFile = fso.OpenTextFile(errorLogPath, 1, false);
+                        errMsg += '\n\n' + errFile.ReadAll();
+                        errFile.Close();
+                    }
+                    showError(errMsg);
+                }
+            } catch(e) {
+                showError(TEXT.errResult + ': ' + e.message);
+            }
+        }
+
+        function showError(msg) {
+            document.getElementById('errorMessage').innerText = msg;
+            showSection('error');
+        }
+
+        function openOutputFolder() {
+            try {
+                var shell = new ActiveXObject("WScript.Shell");
+                shell.Run('explorer.exe "' + appPath + '"');
+            } catch(e) {}
+        }
+
+        function openCSVFile() {
+            try {
+                var shell = new ActiveXObject("WScript.Shell");
+                shell.Run('"' + outputFilePath + '"');
+            } catch(e) {}
+        }
+
+        function resetApp() {
+            selectedFolderPath = '';
+            document.getElementById('pathInput').value = '';
+            updatePathUI(false);
+            showSection(1);
+        }
+    </script>
+</body>
+</html>
