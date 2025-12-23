@@ -19,7 +19,7 @@
 | 種類 | 例 |
 |------|-----|
 | ローカルフォルダ | `C:\Users\...` |
-| 社内サーバ | `\\server\share` |
+| 社内サーバ | `\server\share` |
 | Dropbox | `C:\Users\...\Dropbox\...` |
 | OneDrive | `C:\Users\...\OneDrive\...` |
 | 外付けHDD | `D:\...` |
@@ -27,9 +27,10 @@
 ## ファイル構成
 
 ```
-ディレクトリスキャナー/
+dir-to-csv/
 ├── ディレクトリスキャナー.hta  # アプリ本体（これをダブルクリック）
 ├── directory_scanner.ps1       # スキャン処理（必須）
+├── compare.ps1                 # CSV比較ユーティリティ（オプション）
 └── README.md                   # このファイル
 ```
 
@@ -45,7 +46,7 @@
 
 ```csv
 level1,level2,level3,level4,level5,level6,level7,level8,filename,fullPath
-営業部,2024年度,報告書,,,,,売上報告.xlsx,\\server\営業部\2024年度\報告書\売上報告.xlsx
+営業部,2024年度,報告書,,,,,売上報告.xlsx,\server\営業部\2024年度\報告書\売上報告.xlsx
 ```
 
 - 最大8階層まで対応
