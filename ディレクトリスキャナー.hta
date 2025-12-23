@@ -342,16 +342,19 @@ __pycache__
             document.getElementById('errTitle').innerText = TEXT.errTitle;
             document.getElementById('btnRetry').innerText = TEXT.btnRetry;
 
+            // location.pathnameからHTAの実際のパスを取得（より信頼性が高い）
             try {
-                var shell = new ActiveXObject("WScript.Shell");
-                appPath = shell.CurrentDirectory;
-                if (!appPath) {
-                    var htaPath = location.pathname;
-                    if (htaPath.charAt(0) === '/') htaPath = htaPath.substr(1);
-                    htaPath = htaPath.replace(/\//g, '\\');
-                    appPath = htaPath.substr(0, htaPath.lastIndexOf('\\'));
-                }
-            } catch(e) { appPath = ''; }
+                var htaPath = location.pathname;
+                if (htaPath.charAt(0) === '/') htaPath = htaPath.substr(1);
+                htaPath = decodeURIComponent(htaPath).replace(/\//g, '\\');
+                appPath = htaPath.substr(0, htaPath.lastIndexOf('\\'));
+            } catch(e) {
+                // フォールバック: WScript.Shell.CurrentDirectory
+                try {
+                    var shell = new ActiveXObject("WScript.Shell");
+                    appPath = shell.CurrentDirectory;
+                } catch(e2) { appPath = ''; }
+            }
             window.resizeTo(750, 720);
         };
 
@@ -430,9 +433,7 @@ __pycache__
             var outputFile = document.getElementById('outputFile').value || 'directory_structure.csv';
 
             try {
-                var fso = new ActiveXObject("Scripting.FileSystemObject");
                 var configPath = appPath + "\\config.json";
-                var configFile = fso.CreateTextFile(configPath, true, false);
                 var excArr = excludeDirs.split('\n');
                 var excStr = '';
                 for (var i = 0; i < excArr.length; i++) {
@@ -452,8 +453,14 @@ __pycache__
                 configStr += '    "encoding": "UTF8",\n';
                 configStr += '    "logLevel": "Info"\n';
                 configStr += '}';
-                configFile.Write(configStr);
-                configFile.Close();
+                // UTF-8で保存（日本語パス対応）
+                var stream = new ActiveXObject("ADODB.Stream");
+                stream.Type = 2; // adTypeText
+                stream.Charset = "UTF-8";
+                stream.Open();
+                stream.WriteText(configStr);
+                stream.SaveToFile(configPath, 2); // 2 = adSaveCreateOverWrite
+                stream.Close();
                 outputFilePath = appPath + '\\' + outputFile;
                 setTimeout(function() { runPowerShell(); }, 500);
             } catch(e) {
