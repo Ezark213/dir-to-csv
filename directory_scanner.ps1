@@ -9,15 +9,41 @@
 .PARAMETER ConfigPath
     Path to config.json. Default is same directory as script.
 
+.PARAMETER RootPath
+    Root directory path to scan (passed from HTA).
+
+.PARAMETER OutputFile
+    Output CSV filename (passed from HTA).
+
+.PARAMETER MaxDepth
+    Maximum folder depth 1-8 (passed from HTA).
+
+.PARAMETER ExcludeDirs
+    Comma-separated list of directories to exclude (passed from HTA).
+
+.PARAMETER AppPath
+    Application directory path (passed from HTA).
+
 .EXAMPLE
     .\directory_scanner.ps1
     .\directory_scanner.ps1 -ConfigPath "C:\config\myconfig.json"
+    .\directory_scanner.ps1 -RootPath "C:\Users" -OutputFile "output.csv" -MaxDepth 5 -ExcludeDirs ".git,node_modules" -AppPath "C:\App"
 #>
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)]
-    [string]$ConfigPath = ""
+    [string]$ConfigPath = "",
+    [Parameter(Mandatory = $false)]
+    [string]$RootPath = "",
+    [Parameter(Mandatory = $false)]
+    [string]$OutputFile = "",
+    [Parameter(Mandatory = $false)]
+    [string]$MaxDepth = "",
+    [Parameter(Mandatory = $false)]
+    [string]$ExcludeDirs = "",
+    [Parameter(Mandatory = $false)]
+    [string]$AppPath = ""
 )
 
 $script:LogLevel = "Info"
@@ -285,7 +311,61 @@ $fileCount = 0
 $errCount = 0
 
 try {
-    if ([string]::IsNullOrEmpty($ConfigPath)) {
+    # 環境変数から引数を取得（HTAからの呼び出し時）
+    $envRootPath = $env:SCANNER_ROOT_PATH
+    $envOutputFile = $env:SCANNER_OUTPUT_FILE
+    $envMaxDepth = $env:SCANNER_MAX_DEPTH
+    $envExcludeDirs = $env:SCANNER_EXCLUDE_DIRS
+    $envAppPath = $env:SCANNER_APP_PATH
+
+    # 環境変数が設定されている場合はそれを使用
+    if (-not [string]::IsNullOrEmpty($envRootPath) -and -not [string]::IsNullOrEmpty($envAppPath)) {
+        $RootPath = $envRootPath
+        $OutputFile = $envOutputFile
+        $MaxDepth = $envMaxDepth
+        $ExcludeDirs = $envExcludeDirs
+        $AppPath = $envAppPath
+    }
+
+    # 引数から設定を構築（HTAからの呼び出し時）
+    if (-not [string]::IsNullOrEmpty($RootPath) -and -not [string]::IsNullOrEmpty($AppPath)) {
+        # AppPathを作業ディレクトリに設定
+        Set-Location -Path $AppPath
+
+        # 除外ディレクトリをパース
+        $excludeDirList = @()
+        if (-not [string]::IsNullOrEmpty($ExcludeDirs)) {
+            $excludeDirList = $ExcludeDirs -split ',' | Where-Object { $_.Trim() -ne '' } | ForEach-Object { $_.Trim() }
+        }
+
+        # MaxDepthを数値に変換
+        $maxDepthNum = 8
+        if (-not [string]::IsNullOrEmpty($MaxDepth)) {
+            $maxDepthNum = [int]$MaxDepth
+            if ($maxDepthNum -lt 1) { $maxDepthNum = 1 }
+            if ($maxDepthNum -gt 8) { $maxDepthNum = 8 }
+        }
+
+        # 出力ファイルパスを構築
+        $outputPath = if (-not [string]::IsNullOrEmpty($OutputFile)) { $OutputFile } else { "directory_structure.csv" }
+
+        # config.jsonを生成（PowerShell側で書き込み - セキュリティ制限を回避）
+        $configData = @{
+            rootPath = $RootPath
+            outputPath = $outputPath
+            errorLogPath = "error.log"
+            maxDepth = $maxDepthNum
+            excludeDirs = $excludeDirList
+            excludeFiles = @(".DS_Store", "Thumbs.db")
+            includeHidden = $false
+            encoding = "UTF8"
+            logLevel = "Info"
+        }
+
+        $ConfigPath = Join-Path -Path $AppPath -ChildPath "config.json"
+        $configData | ConvertTo-Json -Depth 10 | Out-File -FilePath $ConfigPath -Encoding UTF8 -Force
+    }
+    elseif ([string]::IsNullOrEmpty($ConfigPath)) {
         $scriptDir = $PSScriptRoot
         if ([string]::IsNullOrEmpty($scriptDir)) {
             $scriptDir = Get-Location

@@ -450,45 +450,40 @@ __pycache__
             var outputFile = document.getElementById('outputFile').value || 'directory_structure.csv';
 
             try {
-                var configPath = appPath + "\\config.json";
+                // 除外ディレクトリをカンマ区切りに変換
                 var excArr = excludeDirs.split('\n');
-                var excStr = '';
+                var excList = [];
                 for (var i = 0; i < excArr.length; i++) {
                     if (excArr[i].trim()) {
-                        if (excStr) excStr += '", "';
-                        excStr += excArr[i].trim();
+                        excList.push(excArr[i].trim());
                     }
                 }
-                var configStr = '{\n';
-                configStr += '    "rootPath": "' + selectedFolderPath.replace(/\\/g, '\\\\') + '",\n';
-                configStr += '    "outputPath": "' + outputFile + '",\n';
-                configStr += '    "errorLogPath": "error.log",\n';
-                configStr += '    "maxDepth": ' + parseInt(maxDepth) + ',\n';
-                configStr += '    "excludeDirs": ["' + excStr + '"],\n';
-                configStr += '    "excludeFiles": [".DS_Store", "Thumbs.db"],\n';
-                configStr += '    "includeHidden": false,\n';
-                configStr += '    "encoding": "UTF8",\n';
-                configStr += '    "logLevel": "Info"\n';
-                configStr += '}';
-                // UTF-8で保存（日本語パス対応）
-                var stream = new ActiveXObject("ADODB.Stream");
-                stream.Type = 2; // adTypeText
-                stream.Charset = "UTF-8";
-                stream.Open();
-                stream.WriteText(configStr);
-                stream.SaveToFile(configPath, 2); // 2 = adSaveCreateOverWrite
-                stream.Close();
+                var excStr = excList.join(',');
+
                 outputFilePath = appPath + '\\' + outputFile;
-                setTimeout(function() { runPowerShell(); }, 500);
+
+                // PowerShellに引数で渡す（config.jsonはPowerShell側で生成）
+                setTimeout(function() {
+                    runPowerShell(selectedFolderPath, outputFile, maxDepth, excStr);
+                }, 500);
             } catch(e) {
                 showError(TEXT.errConfig + ': ' + e.message);
             }
         }
 
-        function runPowerShell() {
+        function runPowerShell(rootPath, outputFile, maxDepth, excludeDirs) {
             try {
                 var shell = new ActiveXObject("WScript.Shell");
                 var psPath = appPath + "\\directory_scanner.ps1";
+
+                // 環境変数経由で引数を渡す（日本語パス対応・エスケープ問題回避）
+                var env = shell.Environment("Process");
+                env("SCANNER_ROOT_PATH") = rootPath;
+                env("SCANNER_OUTPUT_FILE") = outputFile;
+                env("SCANNER_MAX_DEPTH") = maxDepth;
+                env("SCANNER_EXCLUDE_DIRS") = excludeDirs;
+                env("SCANNER_APP_PATH") = appPath;
+
                 var cmd = 'powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + psPath + '"';
                 document.getElementById('progressSub').innerText = TEXT.progSub2;
                 shell.Run(cmd, 0, true);
