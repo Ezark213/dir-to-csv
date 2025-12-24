@@ -342,18 +342,35 @@ __pycache__
             document.getElementById('errTitle').innerText = TEXT.errTitle;
             document.getElementById('btnRetry').innerText = TEXT.btnRetry;
 
-            // location.pathnameからHTAの実際のパスを取得（より信頼性が高い）
+            // HTAの実際のパスを取得（複数の方法を試行）
             try {
-                var htaPath = location.pathname;
-                if (htaPath.charAt(0) === '/') htaPath = htaPath.substr(1);
-                htaPath = decodeURIComponent(htaPath).replace(/\//g, '\\');
-                appPath = htaPath.substr(0, htaPath.lastIndexOf('\\'));
+                // 方法1: document.location.hrefからファイルパスを抽出
+                var href = document.location.href;
+                if (href.indexOf('file:///') === 0) {
+                    var htaPath = href.substr(8); // 'file:///' を除去
+                    htaPath = decodeURIComponent(htaPath).replace(/\//g, '\\');
+                    appPath = htaPath.substr(0, htaPath.lastIndexOf('\\'));
+                } else {
+                    throw new Error('Not a file URL');
+                }
             } catch(e) {
-                // フォールバック: WScript.Shell.CurrentDirectory
+                // 方法2: ScriptFullNameを使用（より確実）
                 try {
+                    var fso = new ActiveXObject("Scripting.FileSystemObject");
                     var shell = new ActiveXObject("WScript.Shell");
-                    appPath = shell.CurrentDirectory;
-                } catch(e2) { appPath = ''; }
+                    // HTAが実行されているディレクトリを取得
+                    var scriptPath = location.pathname;
+                    if (scriptPath.charAt(0) === '/') scriptPath = scriptPath.substr(1);
+                    scriptPath = decodeURIComponent(scriptPath).replace(/\//g, '\\');
+                    if (fso.FileExists(scriptPath)) {
+                        appPath = fso.GetParentFolderName(scriptPath);
+                    } else {
+                        // フォールバック: CurrentDirectory
+                        appPath = shell.CurrentDirectory;
+                    }
+                } catch(e2) {
+                    appPath = '';
+                }
             }
             window.resizeTo(750, 720);
         };
@@ -520,7 +537,13 @@ __pycache__
         }
 
         function showError(msg) {
-            document.getElementById('errorMessage').innerText = msg;
+            // デバッグ情報を追加
+            var debugInfo = '\n\n--- デバッグ情報 ---\n';
+            debugInfo += 'appPath: ' + appPath + '\n';
+            debugInfo += 'psPath: ' + appPath + '\\directory_scanner.ps1\n';
+            debugInfo += 'configPath: ' + appPath + '\\config.json\n';
+            debugInfo += 'location.href: ' + location.href;
+            document.getElementById('errorMessage').innerText = msg + debugInfo;
             showSection('error');
         }
 

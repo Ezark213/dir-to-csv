@@ -19,7 +19,7 @@
 | 種類 | 例 |
 |------|-----|
 | ローカルフォルダ | `C:\Users\...` |
-| 社内サーバ | `\server\share` |
+| 社内サーバ | `\\server\share` |
 | Dropbox | `C:\Users\...\Dropbox\...` |
 | OneDrive | `C:\Users\...\OneDrive\...` |
 | 外付けHDD | `D:\...` |
@@ -27,10 +27,9 @@
 ## ファイル構成
 
 ```
-dir-to-csv/
+ディレクトリスキャナー/
 ├── ディレクトリスキャナー.hta  # アプリ本体（これをダブルクリック）
 ├── directory_scanner.ps1       # スキャン処理（必須）
-├── compare.ps1                 # CSV比較ユーティリティ（オプション）
 └── README.md                   # このファイル
 ```
 
@@ -46,7 +45,7 @@ dir-to-csv/
 
 ```csv
 level1,level2,level3,level4,level5,level6,level7,level8,filename,fullPath
-営業部,2024年度,報告書,,,,,売上報告.xlsx,\server\営業部\2024年度\報告書\売上報告.xlsx
+営業部,2024年度,報告書,,,,,売上報告.xlsx,\\server\営業部\2024年度\報告書\売上報告.xlsx
 ```
 
 - 最大8階層まで対応
@@ -73,6 +72,32 @@ level1,level2,level3,level4,level5,level6,level7,level8,filename,fullPath
 
 - Windows 10 / 11
 - 管理者権限は不要
+
+## トラブルシューティング
+
+### 「スクリプトの実行中にエラーが発生しました」と表示される
+
+エラー画面にデバッグ情報が表示されます。以下を確認してください：
+
+| 確認項目 | 対処法 |
+|---------|--------|
+| `appPath`が空または不完全 | HTAファイルを別の場所にコピーして実行 |
+| `psPath`のファイルが存在しない | `directory_scanner.ps1`が同じフォルダにあるか確認 |
+| ネットワークドライブから実行 | ローカルにコピーしてから実行 |
+
+### SharePoint / OneDrive 同期フォルダから実行する場合
+
+同期フォルダ内で実行するとパス取得に失敗することがあります。その場合：
+
+1. フォルダごとローカル（例：`C:\Tools\ディレクトリスキャナ`）にコピー
+2. コピー先から実行
+
+### PowerShellスクリプトがブロックされる
+
+ダウンロードしたファイルはWindowsにブロックされる場合があります：
+
+1. `directory_scanner.ps1`を右クリック → プロパティ
+2. 「ブロックの解除」にチェック → OK
 
 ## 注意事項
 
