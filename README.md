@@ -19,27 +19,37 @@
 | 種類 | 例 |
 |------|-----|
 | ローカルフォルダ | `C:\Users\...` |
-| 社内サーバ | `\\server\share` |
+| 社内サーバ | `\server\share` |
 | Dropbox | `C:\Users\...\Dropbox\...` |
 | OneDrive | `C:\Users\...\OneDrive\...` |
 | 外付けHDD | `D:\...` |
 
 ## ファイル構成
 
+### 必須ファイル（配布時に必要）
+
+| ファイル | 必須 | 説明 |
+|---------|:----:|------|
+| `ディレクトリスキャナー.hta` | ○ | アプリ本体（これをダブルクリック） |
+| `directory_scanner.ps1` | ○ | スキャン処理スクリプト |
+
 ```
-ディレクトリスキャナー/
-├── ディレクトリスキャナー.hta  # アプリ本体（これをダブルクリック）
-├── directory_scanner.ps1       # スキャン処理（必須）
-└── README.md                   # このファイル
+配布フォルダ/
+├── ディレクトリスキャナー.hta  ← 必須
+└── directory_scanner.ps1       ← 必須
 ```
 
-### 自動生成されるファイル
+### 自動生成されるファイル（配布不要）
 
-| ファイル | 説明 |
-|---------|------|
-| `config.json` | 設定ファイル（自動作成） |
-| `directory_structure.csv` | スキャン結果 |
-| `error.log` | エラーログ |
+以下のファイルはスキャン実行時に自動生成されます。**配布時には含めないでください。**
+
+| ファイル | 説明 | 削除可能 |
+|---------|------|:--------:|
+| `config.json` | 設定ファイル（毎回上書き） | ○ |
+| `directory_structure.csv` | スキャン結果 | ○ |
+| `error.log` | エラーログ | ○ |
+
+> **Note:** `config.json`はGUIで設定した内容をPowerShellに渡すために自動生成されます。手動で作成・編集する必要はありません。
 
 ## 出力形式（CSV）
 
@@ -60,6 +70,45 @@ level1,level2,level3,level4,level5,level6,level7,level8,filename,fullPath
 | 最大階層数 | スキャンする深さ | 8 |
 | 除外フォルダ | スキップするフォルダ名 | .git, node_modules等 |
 | 出力ファイル名 | CSVファイルの名前 | directory_structure.csv |
+
+## config.json について
+
+`config.json`はスキャン実行時に自動生成される設定ファイルです。
+
+### 構造
+
+```json
+{
+    "rootPath": "C:\Users\example\\Documents",
+    "outputPath": "directory_structure.csv",
+    "errorLogPath": "error.log",
+    "maxDepth": 8,
+    "excludeDirs": [".git", "node_modules", "__pycache__", ".venv"],
+    "excludeFiles": [".DS_Store", "Thumbs.db"],
+    "includeHidden": false,
+    "encoding": "UTF8",
+    "logLevel": "Info"
+}
+```
+
+### 各フィールドの説明
+
+| フィールド | 必須 | 型 | 説明 |
+|-----------|:----:|-----|------|
+| `rootPath` | ○ | string | スキャン対象のルートフォルダパス |
+| `outputPath` | ○ | string | 出力CSVファイル名 |
+| `errorLogPath` | - | string | エラーログファイル名 |
+| `maxDepth` | - | number | 最大階層数（1〜8） |
+| `excludeDirs` | - | string[] | 除外するフォルダ名のリスト |
+| `excludeFiles` | - | string[] | 除外するファイル名のリスト |
+| `includeHidden` | - | boolean | 隠しファイル/フォルダを含めるか |
+| `encoding` | - | string | 出力エンコーディング |
+| `logLevel` | - | string | ログレベル（Debug/Info/Warning/Error） |
+
+### 注意
+
+- **通常利用ではconfig.jsonの手動編集は不要です**（GUIから設定可能）
+- PowerShellスクリプトを直接実行する場合のみ、事前にconfig.jsonを作成してください
 
 ## 配布方法
 
