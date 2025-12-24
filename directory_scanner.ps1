@@ -33,6 +33,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)]
+    [string]$ParamsFile = "",
+    [Parameter(Mandatory = $false)]
     [string]$ConfigPath = "",
     [Parameter(Mandatory = $false)]
     [string]$RootPath = "",
@@ -51,6 +53,135 @@ $script:ErrorLogPath = ""
 $script:ErrorLogInitialized = $false
 $script:scannedCount = 0
 $script:errorCount = 0
+$script:ScanStartTime = ""
+$script:CurrentAppPath = ""
+
+function Read-Params {
+    param([string]$ParamsFile)
+
+    if (-not (Test-Path -Path $ParamsFile -PathType Leaf)) {
+        throw "パラメータファイルが見つかりません: $ParamsFile"
+    }
+
+    try {
+        # UTF-8 BOM対応: StreamReaderで読み込み
+        $reader = New-Object System.IO.StreamReader($ParamsFile, [System.Text.Encoding]::UTF8, $true)
+        $jsonContent = $reader.ReadToEnd()
+        $reader.Close()
+        $params = $jsonContent | ConvertFrom-Json
+
+        if ([string]::IsNullOrEmpty($params.rootPath)) {
+            throw "rootPathが指定されていません"
+        }
+        if ([string]::IsNullOrEmpty($params.appPath)) {
+            throw "appPathが指定されていません"
+        }
+
+        $config = @{
+            RootPath      = $params.rootPath
+            OutputPath    = if ($params.outputFile) { $params.outputFile } else { "directory_structure.csv" }
+            ErrorLogPath  = "error.log"
+            MaxDepth      = if ($null -ne $params.maxDepth) { [int]$params.maxDepth } else { 8 }
+            ExcludeDirs   = if ($params.excludeDirs) { @($params.excludeDirs) } else { @() }
+            ExcludeFiles  = @(".DS_Store", "Thumbs.db")
+            IncludeHidden = $false
+            Encoding      = "UTF8"
+            LogLevel      = "Info"
+            AppPath       = $params.appPath
+        }
+
+        if ($config.MaxDepth -lt 1) { $config.MaxDepth = 1 }
+        if ($config.MaxDepth -gt 8) { $config.MaxDepth = 8 }
+
+        return $config
+    }
+    catch {
+        throw "パラメータファイルの読み込みに失敗しました: $_"
+    }
+}
+
+function Test-SymbolicLink {
+    param([System.IO.FileSystemInfo]$Item)
+
+    # ReparsePoint属性がない場合は確実にシンボリックリンクではない
+    $reparsePoint = [System.IO.FileAttributes]::ReparsePoint
+    if (($Item.Attributes -band $reparsePoint) -ne $reparsePoint) {
+        return $false
+    }
+
+    # ReparsePoint属性がある場合、LinkTypeで判定
+    # クラウドファイル（OneDrive, Dropbox等）はLinkTypeが空
+    # シンボリックリンクは "SymbolicLink"、ジャンクションは "Junction"
+    try {
+        $linkType = $Item.LinkType
+        if ($linkType -eq "SymbolicLink" -or $linkType -eq "Junction") {
+            return $true
+        }
+    }
+    catch {
+        # LinkTypeプロパティがない古いPowerShellの場合
+        # Modeプロパティで確認（'l'がシンボリックリンク）
+        if ($Item.Mode -match 'l') {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Write-Progress-File {
+    param(
+        [string]$AppPath,
+        [int]$ScannedCount,
+        [string]$CurrentPath,
+        [int]$ErrorCount
+    )
+
+    $progressPath = Join-Path -Path $AppPath -ChildPath "progress.json"
+    $progress = @{
+        status = "running"
+        scannedCount = $ScannedCount
+        currentPath = $CurrentPath
+        startTime = $script:ScanStartTime
+        errorCount = $ErrorCount
+        lastUpdate = (Get-Date).ToString("o")
+    }
+    $progress | ConvertTo-Json | Out-File -FilePath $progressPath -Encoding UTF8 -Force
+}
+
+function Write-Completion {
+    param(
+        [string]$AppPath,
+        [string]$Status,
+        [int]$FileCount = 0,
+        [int]$ErrorCount = 0,
+        [string]$OutputPath = "",
+        [string]$ErrorCode = "",
+        [string]$ErrorMessage = ""
+    )
+
+    $completionPath = Join-Path -Path $AppPath -ChildPath "completion.json"
+    $completion = @{
+        status = $Status
+        fileCount = $FileCount
+        errorCount = $ErrorCount
+        outputPath = $OutputPath
+        timestamp = (Get-Date).ToString("o")
+    }
+
+    if ($Status -eq "error") {
+        $completion.errorCode = $ErrorCode
+        $completion.errorMessage = $ErrorMessage
+    }
+
+    $completion | ConvertTo-Json | Out-File -FilePath $completionPath -Encoding UTF8 -Force
+}
+
+function Test-CancelRequested {
+    param([string]$AppPath)
+    $cancelFlagPath = Join-Path -Path $AppPath -ChildPath "cancel.flag"
+    return (Test-Path -Path $cancelFlagPath -PathType Leaf)
+}
 
 function Initialize-ErrorLog {
     param([string]$Path)
@@ -185,9 +316,11 @@ function Get-DirectoryStructure {
 
     $script:scannedCount = 0
     $script:errorCount = 0
+    $script:ScanStartTime = (Get-Date).ToString("o")
+    $progressInterval = 500
 
     $rootPath = Resolve-Path -Path $Config.RootPath -ErrorAction Stop
-    
+
     if (-not (Test-Path -Path $rootPath -PathType Container)) {
         throw "Path is not a directory: $($Config.RootPath)"
     }
@@ -211,6 +344,23 @@ function Get-DirectoryStructure {
 
         if ($depth -gt $Config.MaxDepth) { continue }
 
+        # キャンセルチェック・進捗更新（500ファイル毎）
+        if ($script:scannedCount % $progressInterval -eq 0 -and $script:scannedCount -gt 0) {
+            if (Test-CancelRequested -AppPath $Config.AppPath) {
+                Write-Log "キャンセルが要求されました" -Level Info
+                return @{
+                    Results    = $results
+                    FileCount  = $script:scannedCount
+                    ErrorCount = $script:errorCount
+                    Cancelled  = $true
+                }
+            }
+            Write-Progress-File -AppPath $Config.AppPath `
+                                -ScannedCount $script:scannedCount `
+                                -CurrentPath $currentPath `
+                                -ErrorCount $script:errorCount
+        }
+
         try {
             $items = Get-ChildItem -Path $currentPath -Force -ErrorAction Stop | Sort-Object { $_.PSIsContainer }, Name -Descending
         }
@@ -229,6 +379,12 @@ function Get-DirectoryStructure {
             $name = $item.Name
 
             if ($item.PSIsContainer) {
+                # シンボリックリンク/ジャンクションチェック（新規）
+                if (Test-SymbolicLink -Item $item) {
+                    Write-Log "Skipped (symlink): $($item.FullName)" -Level Debug
+                    continue
+                }
+
                 if (Test-ShouldExclude -Name $name -ExcludePatterns $Config.ExcludeDirs -IncludeHidden $Config.IncludeHidden) {
                     Write-Log "Excluded (dir): $($item.FullName)" -Level Debug
                     continue
@@ -277,6 +433,7 @@ function Get-DirectoryStructure {
         Results    = $results
         FileCount  = $script:scannedCount
         ErrorCount = $script:errorCount
+        Cancelled  = $false
     }
 }
 
@@ -309,36 +466,37 @@ function Export-ToCsv {
 $exitCode = 0
 $fileCount = 0
 $errCount = 0
+$config = $null
 
 try {
-    # 環境変数から引数を取得（HTAからの呼び出し時）
-    $envRootPath = $env:SCANNER_ROOT_PATH
-    $envOutputFile = $env:SCANNER_OUTPUT_FILE
-    $envMaxDepth = $env:SCANNER_MAX_DEPTH
-    $envExcludeDirs = $env:SCANNER_EXCLUDE_DIRS
-    $envAppPath = $env:SCANNER_APP_PATH
+    # パラメータ読み込み（優先順位）
+    # 1. params.json（新方式）
+    # 2. 環境変数（後方互換）
+    # 3. config.json（フォールバック）
 
-    # 環境変数が設定されている場合はそれを使用
-    if (-not [string]::IsNullOrEmpty($envRootPath) -and -not [string]::IsNullOrEmpty($envAppPath)) {
-        $RootPath = $envRootPath
-        $OutputFile = $envOutputFile
-        $MaxDepth = $envMaxDepth
-        $ExcludeDirs = $envExcludeDirs
-        $AppPath = $envAppPath
+    if (-not [string]::IsNullOrEmpty($ParamsFile) -and (Test-Path $ParamsFile)) {
+        Write-Host "params.jsonから読み込み: $ParamsFile" -ForegroundColor Cyan
+        $config = Read-Params -ParamsFile $ParamsFile
+        $script:CurrentAppPath = $config.AppPath
+        Set-Location -Path $config.AppPath
     }
+    elseif (-not [string]::IsNullOrEmpty($env:SCANNER_ROOT_PATH) -and -not [string]::IsNullOrEmpty($env:SCANNER_APP_PATH)) {
+        # 後方互換: 環境変数方式
+        Write-Host "環境変数から読み込み（後方互換）" -ForegroundColor Yellow
+        $RootPath = $env:SCANNER_ROOT_PATH
+        $OutputFile = $env:SCANNER_OUTPUT_FILE
+        $MaxDepth = $env:SCANNER_MAX_DEPTH
+        $ExcludeDirs = $env:SCANNER_EXCLUDE_DIRS
+        $AppPath = $env:SCANNER_APP_PATH
 
-    # 引数から設定を構築（HTAからの呼び出し時）
-    if (-not [string]::IsNullOrEmpty($RootPath) -and -not [string]::IsNullOrEmpty($AppPath)) {
-        # AppPathを作業ディレクトリに設定
         Set-Location -Path $AppPath
+        $script:CurrentAppPath = $AppPath
 
-        # 除外ディレクトリをパース
         $excludeDirList = @()
         if (-not [string]::IsNullOrEmpty($ExcludeDirs)) {
             $excludeDirList = $ExcludeDirs -split ',' | Where-Object { $_.Trim() -ne '' } | ForEach-Object { $_.Trim() }
         }
 
-        # MaxDepthを数値に変換
         $maxDepthNum = 8
         if (-not [string]::IsNullOrEmpty($MaxDepth)) {
             $maxDepthNum = [int]$MaxDepth
@@ -346,43 +504,42 @@ try {
             if ($maxDepthNum -gt 8) { $maxDepthNum = 8 }
         }
 
-        # 出力ファイルパスを構築
-        $outputPath = if (-not [string]::IsNullOrEmpty($OutputFile)) { $OutputFile } else { "directory_structure.csv" }
-
-        # config.jsonを生成（PowerShell側で書き込み - セキュリティ制限を回避）
-        $configData = @{
-            rootPath = $RootPath
-            outputPath = $outputPath
-            errorLogPath = "error.log"
-            maxDepth = $maxDepthNum
-            excludeDirs = $excludeDirList
-            excludeFiles = @(".DS_Store", "Thumbs.db")
-            includeHidden = $false
-            encoding = "UTF8"
-            logLevel = "Info"
+        $config = @{
+            RootPath      = $RootPath
+            OutputPath    = if (-not [string]::IsNullOrEmpty($OutputFile)) { $OutputFile } else { "directory_structure.csv" }
+            ErrorLogPath  = "error.log"
+            MaxDepth      = $maxDepthNum
+            ExcludeDirs   = $excludeDirList
+            ExcludeFiles  = @(".DS_Store", "Thumbs.db")
+            IncludeHidden = $false
+            Encoding      = "UTF8"
+            LogLevel      = "Info"
+            AppPath       = $AppPath
         }
-
-        $ConfigPath = Join-Path -Path $AppPath -ChildPath "config.json"
-        $configData | ConvertTo-Json -Depth 10 | Out-File -FilePath $ConfigPath -Encoding UTF8 -Force
     }
-    elseif ([string]::IsNullOrEmpty($ConfigPath)) {
-        $scriptDir = $PSScriptRoot
-        if ([string]::IsNullOrEmpty($scriptDir)) {
-            $scriptDir = Get-Location
+    else {
+        # フォールバック: config.json
+        Write-Host "config.jsonから読み込み（フォールバック）" -ForegroundColor Yellow
+        if ([string]::IsNullOrEmpty($ConfigPath)) {
+            $scriptDir = $PSScriptRoot
+            if ([string]::IsNullOrEmpty($scriptDir)) {
+                $scriptDir = Get-Location
+            }
+            $ConfigPath = Join-Path -Path $scriptDir -ChildPath "config.json"
         }
-        $ConfigPath = Join-Path -Path $scriptDir -ChildPath "config.json"
+        $config = Read-Config -Path $ConfigPath
+        $script:CurrentAppPath = Split-Path -Path $ConfigPath -Parent
+        $config.AppPath = $script:CurrentAppPath
     }
 
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  Directory Structure Scanner v1.0.0" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
-
-    Write-Host "Config: $ConfigPath" -ForegroundColor Gray
-    $config = Read-Config -Path $ConfigPath
     $script:LogLevel = $config.LogLevel
 
-    Initialize-ErrorLog -Path $config.ErrorLogPath
+    Initialize-ErrorLog -Path (Join-Path -Path $config.AppPath -ChildPath $config.ErrorLogPath)
+
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "  Directory Structure Scanner v2.0" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
 
     Write-Log "Config loaded" -Level Info
 
@@ -390,13 +547,49 @@ try {
     $fileCount = $scanResult.FileCount
     $errCount = $scanResult.ErrorCount
 
-    Export-ToCsv -Data $scanResult.Results -OutputPath $config.OutputPath -Encoding $config.Encoding
+    $outputFullPath = Join-Path -Path $config.AppPath -ChildPath $config.OutputPath
 
-    Write-Host ""
-    Write-Host "Completed successfully" -ForegroundColor Green
+    if ($scanResult.Cancelled) {
+        # キャンセル時
+        Export-ToCsv -Data $scanResult.Results -OutputPath $config.OutputPath -Encoding $config.Encoding
+        Write-Completion -AppPath $config.AppPath `
+                         -Status "cancelled" `
+                         -FileCount $fileCount `
+                         -ErrorCount $errCount `
+                         -OutputPath $outputFullPath
+        Write-Host "キャンセルされました" -ForegroundColor Yellow
+    }
+    else {
+        # 正常完了
+        Export-ToCsv -Data $scanResult.Results -OutputPath $config.OutputPath -Encoding $config.Encoding
+        Write-Completion -AppPath $config.AppPath `
+                         -Status "success" `
+                         -FileCount $fileCount `
+                         -ErrorCount $errCount `
+                         -OutputPath $outputFullPath
+        Write-Host ""
+        Write-Host "Completed successfully" -ForegroundColor Green
+    }
 }
 catch {
     Write-Log "Error: $_" -Level Error
+
+    # エラー時のcompletion.json出力
+    if ($config -and $config.AppPath) {
+        $errorCode = "ERR_UNKNOWN"
+        if ($_.Exception.Message -like "*見つかりません*" -or $_.Exception.Message -like "*not found*") {
+            $errorCode = "ERR_PATH_NOT_FOUND"
+        }
+        elseif ($_.Exception.Message -like "*アクセス*" -or $_.Exception.Message -like "*denied*") {
+            $errorCode = "ERR_ACCESS_DENIED"
+        }
+
+        Write-Completion -AppPath $config.AppPath `
+                         -Status "error" `
+                         -ErrorCode $errorCode `
+                         -ErrorMessage $_.Exception.Message
+    }
+
     $exitCode = 1
 }
 finally {

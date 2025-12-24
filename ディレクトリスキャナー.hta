@@ -230,6 +230,10 @@ __pycache__
                     <div class="progress-animation"></div>
                     <div class="progress-text" id="progText"></div>
                     <div class="progress-sub" id="progressSub"></div>
+                    <button class="btn btn-secondary" id="cancelBtn" onclick="cancelScan()"
+                            style="margin-top: 20px; background: #f44336; color: white;">
+                        キャンセル
+                    </button>
                 </div>
             </div>
 
@@ -276,6 +280,16 @@ __pycache__
         var appPath = '';
         var outputFilePath = '';
         var startTime = 0;
+
+        // 新規追加: 非同期実行・ポーリング用
+        var pollingInterval = null;
+        var POLLING_INTERVAL_MS = 1000;
+        var TIMEOUT_MS = 300000;
+        var paramsFilePath = '';
+        var progressFilePath = '';
+        var completionFilePath = '';
+        var cancelFlagPath = '';
+        var isScanning = false;
 
         // Japanese text (loaded via script to avoid encoding issues)
         var TEXT = {
@@ -372,6 +386,13 @@ __pycache__
                     appPath = '';
                 }
             }
+
+            // ファイルブロックチェック（新規追加）
+            if (!checkFileBlock()) {
+                document.getElementById('startBtn').disabled = true;
+                return;
+            }
+
             window.resizeTo(750, 720);
         };
 
@@ -443,92 +464,309 @@ __pycache__
         function startScan() {
             selectedFolderPath = document.getElementById('pathInput').value.trim();
             if (!selectedFolderPath) { alert(TEXT.alertSelect); return; }
+
             showSection(2);
             startTime = new Date().getTime();
+            isScanning = true;
+
             var maxDepth = document.getElementById('maxDepth').value || 8;
             var excludeDirs = document.getElementById('excludeDirs').value || '';
             var outputFile = document.getElementById('outputFile').value || 'directory_structure.csv';
 
+            outputFilePath = appPath + '\\' + outputFile;
+            paramsFilePath = appPath + '\\params.json';
+            progressFilePath = appPath + '\\progress.json';
+            completionFilePath = appPath + '\\completion.json';
+            cancelFlagPath = appPath + '\\cancel.flag';
+
             try {
-                // 除外ディレクトリをカンマ区切りに変換
-                var excArr = excludeDirs.split('\n');
-                var excList = [];
-                for (var i = 0; i < excArr.length; i++) {
-                    if (excArr[i].trim()) {
-                        excList.push(excArr[i].trim());
-                    }
-                }
-                var excStr = excList.join(',');
-
-                outputFilePath = appPath + '\\' + outputFile;
-
-                // PowerShellに引数で渡す（config.jsonはPowerShell側で生成）
-                setTimeout(function() {
-                    runPowerShell(selectedFolderPath, outputFile, maxDepth, excStr);
-                }, 500);
+                cleanupTempFiles();
+                var params = buildParams(selectedFolderPath, outputFile, maxDepth, excludeDirs);
+                writeParamsFile(params);
+                runPowerShellAsync();
+                startPolling();
             } catch(e) {
                 showError(TEXT.errConfig + ': ' + e.message);
             }
         }
 
-        function runPowerShell(rootPath, outputFile, maxDepth, excludeDirs) {
+        function buildParams(rootPath, outputFile, maxDepth, excludeDirsText) {
+            var excArr = excludeDirsText.split('\n');
+            var excList = [];
+            for (var i = 0; i < excArr.length; i++) {
+                var dir = excArr[i].trim();
+                if (dir) { excList.push(dir); }
+            }
+            return {
+                version: "2.0",
+                timestamp: new Date().toISOString(),
+                rootPath: rootPath,
+                outputFile: outputFile,
+                maxDepth: parseInt(maxDepth, 10),
+                excludeDirs: excList,
+                appPath: appPath
+            };
+        }
+
+        function writeParamsFile(params) {
+            var stream = new ActiveXObject("ADODB.Stream");
+            stream.Type = 2;
+            stream.Charset = "UTF-8";
+            stream.Open();
+            var jsonStr = formatJSON(params);
+            stream.WriteText(jsonStr);
+            stream.SaveToFile(paramsFilePath, 2);
+            stream.Close();
+        }
+
+        function formatJSON(obj) {
+            var result = '{\n';
+            var keys = [];
+            for (var key in obj) {
+                if (obj.hasOwnProperty(key)) { keys.push(key); }
+            }
+            for (var i = 0; i < keys.length; i++) {
+                var key = keys[i];
+                var value = obj[key];
+                result += '  "' + key + '": ';
+                if (typeof value === 'string') {
+                    result += '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+                } else if (typeof value === 'number') {
+                    result += value;
+                } else if (Object.prototype.toString.call(value) === '[object Array]') {
+                    result += '[';
+                    for (var j = 0; j < value.length; j++) {
+                        result += '"' + value[j].replace(/\\/g, '\\\\') + '"';
+                        if (j < value.length - 1) result += ', ';
+                    }
+                    result += ']';
+                } else {
+                    result += String(value);
+                }
+                if (i < keys.length - 1) result += ',';
+                result += '\n';
+            }
+            result += '}';
+            return result;
+        }
+
+        function runPowerShellAsync() {
             try {
                 var shell = new ActiveXObject("WScript.Shell");
+                var fso = new ActiveXObject("Scripting.FileSystemObject");
                 var psPath = appPath + "\\directory_scanner.ps1";
 
-                // 環境変数経由で引数を渡す（日本語パス対応・エスケープ問題回避）
-                var env = shell.Environment("Process");
-                env("SCANNER_ROOT_PATH") = rootPath;
-                env("SCANNER_OUTPUT_FILE") = outputFile;
-                env("SCANNER_MAX_DEPTH") = maxDepth;
-                env("SCANNER_EXCLUDE_DIRS") = excludeDirs;
-                env("SCANNER_APP_PATH") = appPath;
+                if (!fso.FileExists(psPath)) {
+                    throw new Error('PowerShell\u30B9\u30AF\u30EA\u30D7\u30C8\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093');
+                }
 
-                var cmd = 'powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + psPath + '"';
+                var cmd = 'powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
+                          psPath + '" -ParamsFile "' + paramsFilePath + '"';
                 document.getElementById('progressSub').innerText = TEXT.progSub2;
-                shell.Run(cmd, 0, true);
-                setTimeout(function() { checkResult(); }, 500);
+                shell.Run(cmd, 0, false);
             } catch(e) {
                 showError(TEXT.errScript + ': ' + e.message);
             }
         }
 
-        function checkResult() {
+        function startPolling() {
+            pollingInterval = setInterval(function() {
+                checkProgress();
+            }, POLLING_INTERVAL_MS);
+        }
+
+        function stopPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+        }
+
+        function checkProgress() {
+            var fso = new ActiveXObject("Scripting.FileSystemObject");
+            var elapsed = new Date().getTime() - startTime;
+
+            if (elapsed > TIMEOUT_MS) {
+                showTimeoutWarning();
+                return;
+            }
+
+            if (fso.FileExists(completionFilePath)) {
+                stopPolling();
+                handleCompletion();
+                return;
+            }
+
+            if (fso.FileExists(progressFilePath)) {
+                try {
+                    var progress = readJSONFile(progressFilePath);
+                    updateProgressUI(progress, elapsed);
+                } catch(e) { }
+            }
+        }
+
+        function readJSONFile(filePath) {
+            var stream = new ActiveXObject("ADODB.Stream");
+            stream.Type = 2;
+            stream.Charset = "UTF-8";
+            stream.Open();
+            stream.LoadFromFile(filePath);
+            var content = stream.ReadText(-1);
+            stream.Close();
+            if (content.charCodeAt(0) === 0xFEFF) {
+                content = content.substr(1);
+            }
+            return eval('(' + content + ')');
+        }
+
+        function updateProgressUI(progress, elapsed) {
+            var elapsedSec = Math.floor(elapsed / 1000);
+            var statusText = TEXT.progText;
+            if (progress && progress.scannedCount) {
+                statusText = progress.scannedCount.toLocaleString() + ' \u30D5\u30A1\u30A4\u30EB\u51E6\u7406\u4E2D...';
+            }
+            document.getElementById('progText').innerText = statusText;
+            document.getElementById('progressSub').innerText = '\u7D4C\u904E\u6642\u9593: ' + elapsedSec + '\u79D2';
+        }
+
+        function handleCompletion() {
+            isScanning = false;
             try {
-                var fso = new ActiveXObject("Scripting.FileSystemObject");
-                if (fso.FileExists(outputFilePath)) {
-                    var endTime = new Date().getTime();
-                    var duration = ((endTime - startTime) / 1000).toFixed(1);
-                    // Use ADODB.Stream for UTF-8 files
-                    var stream = new ActiveXObject("ADODB.Stream");
-                    stream.Type = 2; // adTypeText
-                    stream.Charset = "UTF-8";
-                    stream.Open();
-                    stream.LoadFromFile(outputFilePath);
-                    var content = stream.ReadText(-1); // -1 = adReadAll
-                    stream.Close();
-                    var lines = content.split('\n');
-                    var lineCount = 0;
-                    for (var i = 0; i < lines.length; i++) {
-                        if (lines[i].trim()) lineCount++;
-                    }
-                    document.getElementById('resultFiles').innerText = Math.max(0, lineCount - 1).toLocaleString();
-                    document.getElementById('resultTime').innerText = duration;
-                    document.getElementById('outputPath').innerText = outputFilePath;
-                    showSection(3);
+                var completion = readJSONFile(completionFilePath);
+                if (completion.status === 'success') {
+                    showSuccessResult(completion);
+                } else if (completion.status === 'cancelled') {
+                    showCancelledResult(completion);
                 } else {
-                    var errMsg = TEXT.errNoCSV;
-                    var errorLogPath = appPath + "\\error.log";
-                    if (fso.FileExists(errorLogPath)) {
-                        var errFile = fso.OpenTextFile(errorLogPath, 1, false);
-                        errMsg += '\n\n' + errFile.ReadAll();
-                        errFile.Close();
-                    }
-                    showError(errMsg);
+                    showErrorResult(completion);
                 }
             } catch(e) {
                 showError(TEXT.errResult + ': ' + e.message);
+            } finally {
+                cleanupTempFiles();
             }
+        }
+
+        function showSuccessResult(completion) {
+            var duration = ((new Date().getTime() - startTime) / 1000).toFixed(1);
+            document.getElementById('resultFiles').innerText = completion.fileCount.toLocaleString();
+            document.getElementById('resultTime').innerText = duration;
+            document.getElementById('outputPath').innerText = completion.outputPath;
+            if (completion.errorCount > 0) {
+                document.getElementById('doneDesc').innerText =
+                    TEXT.doneDesc + '\uFF08' + completion.errorCount + '\u4EF6\u306E\u30A2\u30AF\u30BB\u30B9\u30A8\u30E9\u30FC\uFF09';
+            }
+            showSection(3);
+        }
+
+        function showCancelledResult(completion) {
+            document.getElementById('resultFiles').innerText = completion.fileCount.toLocaleString() + ' (\u9014\u4E2D)';
+            document.getElementById('resultTime').innerText = ((new Date().getTime() - startTime) / 1000).toFixed(1);
+            document.getElementById('outputPath').innerText = completion.outputPath;
+            document.getElementById('doneTitle').innerText = '\u30B9\u30AD\u30E3\u30F3\u304C\u30AD\u30E3\u30F3\u30BB\u30EB\u3055\u308C\u307E\u3057\u305F';
+            document.getElementById('doneDesc').innerText = '\u9014\u4E2D\u307E\u3067\u306E\u7D50\u679C\u304CCSV\u306B\u4FDD\u5B58\u3055\u308C\u3066\u3044\u307E\u3059';
+            showSection(3);
+        }
+
+        function showErrorResult(completion) {
+            var errorMsg = getErrorMessage(completion.errorCode);
+            showError(errorMsg + '\n\n\u8A73\u7D30: ' + completion.errorMessage);
+        }
+
+        function cancelScan() {
+            if (!isScanning) return;
+            try {
+                var fso = new ActiveXObject("Scripting.FileSystemObject");
+                var file = fso.CreateTextFile(cancelFlagPath, true);
+                file.WriteLine(new Date().toISOString());
+                file.Close();
+                document.getElementById('progText').innerText = '\u30AD\u30E3\u30F3\u30BB\u30EB\u4E2D...';
+                document.getElementById('progressSub').innerText = '\u51E6\u7406\u3092\u4E2D\u65AD\u3057\u3066\u3044\u307E\u3059\u3002\u3057\u3070\u3089\u304F\u304A\u5F85\u3061\u304F\u3060\u3055\u3044\u3002';
+            } catch(e) {
+                showError('\u30AD\u30E3\u30F3\u30BB\u30EB\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ' + e.message);
+            }
+        }
+
+        function showTimeoutWarning() {
+            stopPolling();
+            var result = confirm(
+                '\u51E6\u7406\u306B5\u5206\u4EE5\u4E0A\u304B\u304B\u3063\u3066\u3044\u307E\u3059\u3002\n\n' +
+                '\u7D9A\u884C\u3057\u307E\u3059\u304B\uFF1F\n' +
+                '\u300COK\u300D: \u7D9A\u884C\uFF08\u3055\u3089\u306B5\u5206\u5F85\u6A5F\uFF09\n' +
+                '\u300C\u30AD\u30E3\u30F3\u30BB\u30EB\u300D: \u51E6\u7406\u3092\u4E2D\u65AD'
+            );
+            if (result) {
+                startTime = new Date().getTime();
+                startPolling();
+            } else {
+                cancelScan();
+                startPolling();
+            }
+        }
+
+        function cleanupTempFiles() {
+            var fso = new ActiveXObject("Scripting.FileSystemObject");
+            // デバッグ: params.jsonは削除しない
+            var tempFiles = [progressFilePath, completionFilePath, cancelFlagPath];
+            for (var i = 0; i < tempFiles.length; i++) {
+                try {
+                    if (tempFiles[i] && fso.FileExists(tempFiles[i])) {
+                        fso.DeleteFile(tempFiles[i]);
+                    }
+                } catch(e) { }
+            }
+        }
+
+        function getErrorMessage(errorCode) {
+            var messages = {
+                'ERR_PATH_NOT_FOUND': '\u6307\u5B9A\u3055\u308C\u305F\u30D1\u30B9\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002\n\u30D1\u30B9\u304C\u6B63\u3057\u3044\u304B\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002',
+                'ERR_ACCESS_DENIED': '\u30A2\u30AF\u30BB\u30B9\u304C\u62D2\u5426\u3055\u308C\u307E\u3057\u305F\u3002\n\u30D5\u30A9\u30EB\u30C0\u3078\u306E\u30A2\u30AF\u30BB\u30B9\u6A29\u9650\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002',
+                'ERR_FILE_BLOCKED': '\u30BB\u30AD\u30E5\u30EA\u30C6\u30A3\u8A2D\u5B9A\u306B\u3088\u308A\u5B9F\u884C\u304C\u30D6\u30ED\u30C3\u30AF\u3055\u308C\u3066\u3044\u307E\u3059\u3002\n\u30D5\u30A1\u30A4\u30EB\u306E\u30D6\u30ED\u30C3\u30AF\u3092\u89E3\u9664\u3057\u3066\u304F\u3060\u3055\u3044\u3002',
+                'ERR_PS1_NOT_FOUND': 'PowerShell\u30B9\u30AF\u30EA\u30D7\u30C8\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002\ndirectory_scanner.ps1\u304C\u540C\u3058\u30D5\u30A9\u30EB\u30C0\u306B\u3042\u308B\u304B\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002',
+                'ERR_PARAMS_INVALID': '\u30D1\u30E9\u30E1\u30FC\u30BF\u304C\u4E0D\u6B63\u3067\u3059\u3002\n\u5165\u529B\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002',
+                'ERR_WRITE_FAILED': '\u30D5\u30A1\u30A4\u30EB\u306E\u66F8\u304D\u8FBC\u307F\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002\n\u30C7\u30A3\u30B9\u30AF\u5BB9\u91CF\u3068\u66F8\u304D\u8FBC\u307F\u6A29\u9650\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002',
+                'ERR_TIMEOUT': '\u30B9\u30AD\u30E3\u30F3\u304C\u30BF\u30A4\u30E0\u30A2\u30A6\u30C8\u3057\u307E\u3057\u305F\u3002\n\u30B9\u30AD\u30E3\u30F3\u5BFE\u8C61\u3092\u7D5E\u308B\u304B\u3001\u9664\u5916\u30D5\u30A9\u30EB\u30C0\u3092\u8A2D\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\u3002',
+                'ERR_UNKNOWN': '\u4E88\u671F\u3057\u306A\u3044\u30A8\u30E9\u30FC\u304C\u767A\u751F\u3057\u307E\u3057\u305F\u3002'
+            };
+            return messages[errorCode] || messages['ERR_UNKNOWN'];
+        }
+
+        function checkFileBlock() {
+            try {
+                var fso = new ActiveXObject("Scripting.FileSystemObject");
+                var shell = new ActiveXObject("WScript.Shell");
+                var psPath = appPath + "\\directory_scanner.ps1";
+                if (!fso.FileExists(psPath)) {
+                    showBlockError('ERR_PS1_NOT_FOUND');
+                    return false;
+                }
+                return true;
+            } catch(e) {
+                showBlockError('ERR_FILE_BLOCKED');
+                return false;
+            }
+        }
+
+        function showBlockError(errorCode) {
+            var msg = getErrorMessage(errorCode);
+            var guidance = getBlockGuidance();
+            document.getElementById('errorMessage').innerHTML =
+                '<div style="white-space:pre-wrap;">' + msg + '\n\n' + guidance + '</div>';
+            showSection('error');
+        }
+
+        function getBlockGuidance() {
+            return '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n' +
+                   '\u3010\u89E3\u9664\u624B\u9806\u3011\n\n' +
+                   '1. \u4EE5\u4E0B\u306E\u30D5\u30A1\u30A4\u30EB\u3092\u53F3\u30AF\u30EA\u30C3\u30AF\n' +
+                   '   \u30FB\u30C7\u30A3\u30EC\u30AF\u30C8\u30EA\u30B9\u30AD\u30E3\u30CA\u30FC.hta\n' +
+                   '   \u30FBdirectory_scanner.ps1\n\n' +
+                   '2.\u300C\u30D7\u30ED\u30D1\u30C6\u30A3\u300D\u3092\u9078\u629E\n\n' +
+                   '3.\u300C\u5168\u822C\u300D\u30BF\u30D6\u306E\u4E0B\u90E8\u306B\u3042\u308B\n' +
+                   '  \u300C\u30D6\u30ED\u30C3\u30AF\u306E\u89E3\u9664\u300D\u306B\u30C1\u30A7\u30C3\u30AF\n\n' +
+                   '4.\u300COK\u300D\u3092\u30AF\u30EA\u30C3\u30AF\n\n' +
+                   '5. \u30A2\u30D7\u30EA\u3092\u518D\u8D77\u52D5\n' +
+                   '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501';
         }
 
         function showError(msg) {
